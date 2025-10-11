@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.2"
+__version__ = "0.3"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -36,6 +36,8 @@ INDEX_HTML = """
   .folder > .tree-item .icon-open, .folder.expanded > .tree-item .icon-closed { display: none; }
   .folder.expanded > .tree-item .icon-open { display: inline-block; }
   .icon { width: 1em; height: 1em; vertical-align: -0.125em; }
+  .hidden { display: none; }
+  mark { background-color: var(--pico-color-yellow-200); padding: 0; }
 </style>
 </head>
 <body>
@@ -65,6 +67,9 @@ INDEX_HTML = """
   {% if tree is defined %}
   <article style="margin-top: 2rem;">
     <header>Contents of <a href="{{url}}" target="_blank">{{ url }}</a></header>
+    <div style="padding: 1rem 0;">
+      <input type="search" id="search-box" placeholder="Search files and folders...">
+    </div>
     <div class="tree">
   {% macro render_tree(subtree, prefix='') %}
     <ul>
@@ -133,6 +138,40 @@ INDEX_HTML = """
       window.location.href = "{{ url_for('index') }}";
     });
   });
+  
+  // Search functionality
+  const searchBox = document.getElementById('search-box');
+  if (searchBox) {
+    searchBox.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase();
+        const allItems = document.querySelectorAll('.tree li');
+
+        // If search is cleared, unhide everything and let localStorage state take over.
+        if (!searchTerm) {
+            allItems.forEach(item => item.classList.remove('hidden'));
+            return;
+        }
+
+        // First, hide all items.
+        allItems.forEach(item => item.classList.add('hidden'));
+
+        // Find matches and reveal them and their parents.
+        allItems.forEach(item => {
+            const label = item.querySelector('.tree-item-label');
+            if (label && label.textContent.toLowerCase().includes(searchTerm)) {
+                // Show the matched item itself.
+                item.classList.remove('hidden');
+                // Show and expand all of its parent folders.
+                let parent = item.parentElement.closest('li.folder');
+                while (parent) {
+                    parent.classList.remove('hidden');
+                    parent.classList.add('expanded');
+                    parent = parent.parentElement.closest('li.folder');
+                }
+            }
+        });
+    });
+  }
 
   // --- Functions ---
   function toggle(event, element) {

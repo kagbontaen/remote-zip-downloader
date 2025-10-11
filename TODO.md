@@ -20,6 +20,6 @@ This file tracks planned features and improvements for the Remote ZIP Viewer.
 ## Low Priority / Future Ideas
 
 - [ ] **Expand Functionality:**
-    - [ ] **File Search/Filter:** Add a client-side search box to filter the file tree in real-time.
+    - [x] **File Search/Filter:** Add a client-side search box to filter the file tree in real-time. (Improved in v0.3)
     - [ ] **Support for Authenticated URLs:** Allow passing authentication headers (e.g., Bearer tokens) for accessing private ZIP archives.
     - [ ] **Download Selected as ZIP:** Add checkboxes to files/folders and a "Download Selected" button to stream a new ZIP containing only the chosen items.
