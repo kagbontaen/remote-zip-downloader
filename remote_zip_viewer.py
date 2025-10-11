@@ -8,6 +8,7 @@ from cachetools import cached, TTLCache
 
 app = Flask(__name__)
 __version__ = "0.5"
+__version__ = "0.5"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -333,7 +334,9 @@ if __name__ == "__main__":
         except (socket.error, OSError):
             import random
             port = random.randint(5000, 6000)
-            print(f"Port 80 not available. Using random port: {port}")
+            print(f"Port 80 not available. do you have IIS running on port 80?")
+            print(f"Using a random port between 5000 and 6000 instead.")
+            print(f" Using random port: {port}")
         finally:
             sock.close()
         
