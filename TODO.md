@@ -13,9 +13,9 @@ This file tracks planned features and improvements for the Remote ZIP Viewer.
     - [x] **Add Loading Indicator:** Show a spinner or "Processing..." message after the "Open" button is clicked to provide immediate feedback.
     - [x] **Add Reset Button:** Implement a "Clear" button to easily reset the URL input and file tree.
 
-- [ ] **Add Unit and Integration Tests:**
-    - [ ] **Unit Tests:** Create tests for `list_entries` using `pytest` and a mock `RemoteZip` object to validate tree generation logic.
-    - [ ] **Integration Tests:** Use Flask's test client to simulate requests to all routes (`/`, `/view`, `/file`, `/preview`, `/image`) to ensure they function correctly.
+- [x] **Add Unit and Integration Tests:**
+    - [x] **Unit Tests:** Create tests for `list_entries` using `pytest` and a mock `RemoteZip` object to validate tree generation logic.
+    - [x] **Integration Tests:** Use Flask's test client to simulate requests to all routes (`/`, `/view`, `/file`, `/preview`, `/image`) to ensure they function correctly.
 
 ## Low Priority / Future Ideas
 
