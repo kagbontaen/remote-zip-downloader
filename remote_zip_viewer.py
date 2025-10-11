@@ -1,0 +1,219 @@
+# remote_zip_viewer_remotezip.py
+from flask import Flask, request, render_template_string, Response, redirect, url_for, abort
+from remotezip import RemoteZip
+from pathlib import Path
+import mimetypes
+from functools import wraps
+
+app = Flask(__name__)
+
+INDEX_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote ZIP Viewer</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+<style>
+  :root { --pico-font-size: 100%; }
+  main { padding-top: 2rem; }
+  .error { color: var(--pico-color-red-500); }
+  .tree ul { list-style-type: none; padding-left: 1.5rem; }
+  .tree li { padding: 0.2rem 0; }
+  .tree-item { display: flex; align-items: center; gap: 0.5rem; }
+  .tree-item-label { flex-grow: 1; }
+  .tree-item-size { color: var(--pico-secondary); font-size: 0.9em; min-width: 100px; text-align: right; }
+  .tree-item-actions { display: flex; justify-content: flex-end; gap: 0.5rem; min-width: 380px; }
+  .tree-item-actions a[role="button"] { width: 120px; margin: 0; }
+  .folder > .tree-item { cursor: pointer; font-weight: bold; }
+  .folder > ul { display: none; }
+  .folder.expanded > ul { display: block; }
+  .folder > .tree-item .icon-open, .folder.expanded > .tree-item .icon-closed { display: none; }
+  .folder.expanded > .tree-item .icon-open { display: inline-block; }
+  .icon { width: 1em; height: 1em; vertical-align: -0.125em; }
+</style>
+</head>
+<body>
+<main class="container">
+  <h2 style="margin-bottom: 1.5rem;">Remote ZIP Viewer</h2>
+  <form action="{{ url_for('view') }}" method="get">
+    <label for="url">Remote ZIP URL</label>
+    <input type="url" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
+    <div class="grid">
+      <fieldset style="margin-bottom: 0;">
+        <label for="no_verify">
+          <input type="checkbox" id="no_verify" name="no_verify" role="switch" {% if no_verify %}checked{% endif %}>
+          Disable SSL verification
+        </label>
+      </fieldset>
+      <button type="submit" style="margin-top: 1.5rem;">Open</button>
+    </div>
+  </form>
+
+  {% if error %}
+    <p class="error"><strong>Error:</strong> {{ error }}</p>
+  {% endif %}
+
+  {% if tree is defined %}
+  <article style="margin-top: 2rem;">
+    <header>Contents of <a href="{{url}}" target="_blank">{{ url }}</a></header>
+    <div class="tree">
+  {% macro render_tree(subtree) %}
+    <ul>
+    {% for name, node in subtree|dictsort %}
+      {% if node.type == 'dir' %}
+        <li class="folder" onclick="toggle(event, this)">
+          <div class="tree-item">
+            <svg class="icon icon-closed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
+            <svg class="icon icon-open" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2.06 11L15 15.28 12.06 17l-1.06-1.06L14.44 12 11 8.56 12.06 7.5 15 10.44 17.94 7.5 19 8.56 15.56 12l3.44 3.44L17.94 17z"/></svg>
+            <span class="tree-item-label">{{ name }}</span>
+          </div>
+          {{ render_tree(node.children) }}
+        </li>
+      {% else %}
+        <li class="file">
+          <div class="tree-item">
+            <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/></svg>
+            <span class="tree-item-label">{{ name }}</span>
+            <span class="tree-item-size">{{ node.info.file_size }} bytes</span>
+            <div class="tree-item-actions">
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Download</a>
+              {% if node.info.is_text %}
+                <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
+              {% endif %}
+              {% if node.info.is_image %}
+                <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
+              {% endif %}
+            </div>
+          </div>
+        </li>
+      {% endif %}
+    {% endfor %}
+    </ul>
+  {% endmacro %}
+  {{ render_tree(tree) }}
+    </div>
+  </article>
+  {% endif %}
+<script>
+  function toggle(event, element) {
+    event.stopPropagation();
+    element.classList.toggle('expanded');
+  }
+</script>
+</main>
+</body>
+</html>
+"""
+
+TEXT_EXTS = (".txt",".md",".py",".csv",".log",".json",".xml",".html",".htm",".cfg",".ini",".plist",".yaml",".yml")
+IMAGE_EXTS = (".png",".jpg",".jpeg",".gif",".webp")
+
+def list_entries(url, no_verify=False):
+    tree = {}
+    session_kwargs = {'verify': not no_verify}
+    with RemoteZip(url, **session_kwargs) as rz:
+        for info in rz.infolist():
+            # Skip directory entries, we build the structure from file paths
+            if info.is_dir():
+                continue
+
+            parts = info.filename.split('/')
+            current_level = tree
+            for part in parts[:-1]:
+                if part not in current_level:
+                    current_level[part] = {"type": "dir", "children": {}}
+                current_level = current_level[part]["children"]
+            
+            filename = parts[-1]
+            if filename:
+                lower = info.filename.lower()
+                current_level[filename] = {
+                    "type": "file",
+                    "info": {
+                        "filename": info.filename,
+                        "file_size": info.file_size,
+                        "compress_size": info.compress_size,
+                        "is_text": lower.endswith(TEXT_EXTS),
+                        "is_image": lower.endswith(IMAGE_EXTS),
+                    }
+                }
+    return tree
+
+@app.route("/")
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route("/view")
+def view():
+    url = request.args.get("url")
+    no_verify = request.args.get("no_verify") == "on"
+    if not url: return redirect(url_for("index"))
+    try:
+        tree = list_entries(url, no_verify=no_verify)
+        return render_template_string(INDEX_HTML, tree=tree, url=url, no_verify=no_verify)
+    except Exception as e:
+        return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=no_verify)
+
+def with_remote_zip(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        url = request.args.get("url")
+        name = request.args.get("name")
+        if not url or not name:
+            abort(400, "Missing 'url' or 'name' parameter.")
+        
+        try:
+            # Pass URL and name to the view function, which will manage the RemoteZip context
+            return f(url, name, *args, **kwargs)
+        except Exception as e:
+            return f"Error processing request: {e}", 500
+    return decorated_function
+
+@app.route("/preview")
+@with_remote_zip
+def preview_file(url, name):
+    no_verify = request.args.get("no_verify") == "on"
+    session_kwargs = {'verify': not no_verify}
+    with RemoteZip(url, **session_kwargs) as rz:
+        with rz.open(name) as f:
+            data = f.read(100*1024)  # limit preview size
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = data.decode("latin-1", errors="replace")
+    return f"<h3>Preview of {name}</h3><pre>{text}</pre>"
+
+@app.route("/image")
+@with_remote_zip
+def preview_image(url, name):
+    no_verify = request.args.get("no_verify") == "on"
+    session_kwargs = {'verify': not no_verify}
+    def generate():
+        with RemoteZip(url, **session_kwargs) as rz:
+            with rz.open(name) as f:
+                while True:
+                    chunk = f.read(64*1024)
+                    if not chunk: break
+                    yield chunk
+    mime, _ = mimetypes.guess_type(name)
+    return Response(generate(), mimetype=mime or "application/octet-stream")
+
+@app.route("/file")
+@with_remote_zip
+def download_file(url, name):
+    no_verify = request.args.get("no_verify") == "on"
+    session_kwargs = {'verify': not no_verify}
+    def generate():
+        with RemoteZip(url, **session_kwargs) as rz:
+            with rz.open(name) as f:
+                while True:
+                    chunk = f.read(64*1024)
+                    if not chunk: break
+                    yield chunk
+    headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
+    return Response(generate(), headers=headers, mimetype="application/octet-stream")
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
