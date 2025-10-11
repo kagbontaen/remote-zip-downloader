@@ -3,6 +3,7 @@
 Flask
 remotezip
 cachetools
+gunicorn
 
 # --- Development & Testing Dependencies ---
 # For running the test suite

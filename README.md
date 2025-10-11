@@ -39,23 +39,14 @@ A single-file Flask web application to browse, preview, and download the content
     source venv/bin/activate
     ```
 
-3.  Install the required dependencies. You can create a `requirements.txt` file with the following content:
-    ```txt
-    Flask
-    remotezip
-    cachetools
-    pytest
-    pytest-flask
-    pytest-mock
-    ```
-    Then install it:
+3.  Install the required dependencies from the `requirements.txt` file:
     ```sh
     pip install -r requirements.txt
     ```
 
-## Usage
+## Usage (Local Development)
 
-Run the Flask application:
+Run the Flask development server:
 ```sh
 python remote_zip_viewer.py
 ```
