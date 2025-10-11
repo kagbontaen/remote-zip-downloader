@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.3"
+__version__ = "0.4"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -45,18 +45,18 @@ INDEX_HTML = """
   <h2 style="margin-bottom: 1.5rem;">Remote ZIP Viewer</h2>
   <form action="{{ url_for('view') }}" method="get">
     <label for="url">Remote ZIP URL</label>
-    <input type="url" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
-    <div class="grid">
-      <fieldset style="margin-bottom: 0;">
+    <input type="search" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
+    <div class="grid" style="align-items: end; margin-top: 1.5rem;">
+      <div class="grid" style="gap: 0.5rem;">
+        <button id="open-btn" type="submit">Open</button>
+        <button id="clear-btn" type="button" class="secondary">Clear</button>
+      </div>
+      <fieldset style="margin: 0;">
         <label for="no_verify">
           <input type="checkbox" id="no_verify" name="no_verify" role="switch" {% if no_verify %}checked{% endif %}>
           Disable SSL verification
         </label>
       </fieldset>
-      <div class="grid" style="margin-top: 1.5rem; gap: 0.5rem;">
-        <button id="open-btn" type="submit">Open</button>
-        <button id="clear-btn" type="button" class="secondary">Clear</button>
-      </div>
     </div>
   </form>
 
@@ -312,4 +312,27 @@ def download_file(url, name, no_verify):
     return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import socket
+    import webbrowser
+    import random
+    from threading import Timer
+
+    def is_port_available(port_to_check):
+        """Checks if a port is available by trying to bind to it."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                # Try to bind to the port on the loopback address
+                s.bind(("127.0.0.1", port_to_check))
+                return True
+            except socket.error:
+                # The port is either in use or requires privileges we don't have
+                return False
+
+    # Prefer port 80 if available, otherwise fall back to a random port in the range 5000-6000.
+    # Note: Binding to port 80 on many systems requires administrator/root privileges.
+    port = 80 if is_port_available(80) else random.randint(5000, 6000)
+
+    url = f"http://127.0.0.1:{port}"
+    # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
+    Timer(1, lambda: webbrowser.open(url)).start()
+    app.run(debug=True, port=port)
