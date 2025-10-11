@@ -1,0 +1,11 @@
+# --- Application Dependencies ---
+# Core web framework and remote file access
+Flask
+remotezip
+cachetools
+
+# --- Development & Testing Dependencies ---
+# For running the test suite
+pytest
+pytest-flask
+pytest-mock
