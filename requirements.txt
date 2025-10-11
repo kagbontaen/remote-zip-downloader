@@ -3,8 +3,8 @@
 Flask
 remotezip
 cachetools
+gunicorn
 waitress
-
 # --- Development & Testing Dependencies ---
 # For running the test suite
 pytest
