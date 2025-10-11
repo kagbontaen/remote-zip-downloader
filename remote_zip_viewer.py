@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.4"
+__version__ = "0.5"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -314,25 +314,22 @@ def download_file(url, name, no_verify):
 if __name__ == "__main__":
     import socket
     import webbrowser
-    import random
     from threading import Timer
 
-    def is_port_available(port_to_check):
-        """Checks if a port is available by trying to bind to it."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                # Try to bind to the port on the loopback address
-                s.bind(("127.0.0.1", port_to_check))
-                return True
-            except socket.error:
-                # The port is either in use or requires privileges we don't have
-                return False
+    # Try to bind to port 80 first. If it fails due to permissions or being
+    # in use, fall back to port 5000.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", 80))
+        port = 80
+    except (socket.error, OSError):
+        import random
+        port = random.randint(5000, 6000)
+        print(f"Port 80 is not available or requires admin privileges. Falling back to port {port}.")
+    sock.close()
 
-    # Prefer port 80 if available, otherwise fall back to a random port in the range 5000-6000.
-    # Note: Binding to port 80 on many systems requires administrator/root privileges.
-    port = 80 if is_port_available(80) else 5000
-
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
     # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
-    Timer(1, webbrowser.open(url)).start()
+    Timer(1, lambda: webbrowser.open(url)).start()
     app.run(debug=True, port=port)
