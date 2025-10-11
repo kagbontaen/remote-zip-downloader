@@ -6,6 +6,8 @@ import mimetypes
 from functools import wraps
 
 app = Flask(__name__)
+__version__ = "0.2"
+app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
 <!doctype html>
@@ -24,8 +26,8 @@ INDEX_HTML = """
   .tree-item { display: flex; align-items: center; gap: 0.5rem; }
   .tree-item-label { flex-grow: 1; }
   .tree-item-size { color: var(--pico-secondary); font-size: 0.9em; min-width: 100px; text-align: right; }
-  .tree-item-actions { display: flex; justify-content: flex-end; gap: 0.5rem; min-width: 380px; }
-  .tree-item-actions a[role="button"] { width: 120px; margin: 0; }
+  .tree-item-actions { display: flex; justify-content: flex-end; gap: 0.5rem; min-width: 320px; }
+  .tree-item-actions a[role="button"] { width: 100px; margin: 0; padding: 0.5rem 0.75rem; }
   .folder > .tree-item { cursor: pointer; font-weight: bold; }
   .folder > ul { display: none; }
   .folder.expanded > ul { display: block; }
@@ -78,7 +80,7 @@ INDEX_HTML = """
             <span class="tree-item-label">{{ name }}</span>
             <span class="tree-item-size">{{ node.info.file_size }} bytes</span>
             <div class="tree-item-actions">
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Download</a>
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Get File</a>
               {% if node.info.is_text %}
                 <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
               {% endif %}
@@ -102,6 +104,12 @@ INDEX_HTML = """
     element.classList.toggle('expanded');
   }
 </script>
+<footer class="container" style="text-align: center; margin-top: 2rem; color: var(--pico-secondary);">
+  <small>
+    Remote ZIP Viewer v{{ version }} | 
+    <a href="https://github.com/kinc-google/remote-zip-downloader" target="_blank">Source Code</a>
+  </small>
+</footer>
 </main>
 </body>
 </html>
@@ -110,10 +118,13 @@ INDEX_HTML = """
 TEXT_EXTS = (".txt",".md",".py",".csv",".log",".json",".xml",".html",".htm",".cfg",".ini",".plist",".yaml",".yml")
 IMAGE_EXTS = (".png",".jpg",".jpeg",".gif",".webp")
 
+def _get_session_kwargs(no_verify=False):
+    """Returns the kwargs for the RemoteZip session."""
+    return {'verify': not no_verify}
+
 def list_entries(url, no_verify=False):
     tree = {}
-    session_kwargs = {'verify': not no_verify}
-    with RemoteZip(url, **session_kwargs) as rz:
+    with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
         for info in rz.infolist():
             # Skip directory entries, we build the structure from file paths
             if info.is_dir():
@@ -128,15 +139,14 @@ def list_entries(url, no_verify=False):
             
             filename = parts[-1]
             if filename:
-                lower = info.filename.lower()
                 current_level[filename] = {
                     "type": "file",
                     "info": {
                         "filename": info.filename,
                         "file_size": info.file_size,
                         "compress_size": info.compress_size,
-                        "is_text": lower.endswith(TEXT_EXTS),
-                        "is_image": lower.endswith(IMAGE_EXTS),
+                        "is_text": info.filename.lower().endswith(TEXT_EXTS),
+                        "is_image": info.filename.lower().endswith(IMAGE_EXTS),
                     }
                 }
     return tree
@@ -161,59 +171,59 @@ def with_remote_zip(f):
     def decorated_function(*args, **kwargs):
         url = request.args.get("url")
         name = request.args.get("name")
+        no_verify = request.args.get("no_verify") == "on"
+
         if not url or not name:
             abort(400, "Missing 'url' or 'name' parameter.")
         
-        try:
-            # Pass URL and name to the view function, which will manage the RemoteZip context
-            return f(url, name, *args, **kwargs)
-        except Exception as e:
-            return f"Error processing request: {e}", 500
+        # Pass the parsed arguments to the decorated function
+        return f(url, name, no_verify, *args, **kwargs)
     return decorated_function
+
+def _stream_zip_file(url, name, no_verify):
+    """
+    A generator that creates a RemoteZip instance and streams a file from it.
+    This ensures the RemoteZip object remains open during the entire stream.
+    """
+    try:
+        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+            with rz.open(name) as f:
+                while True:
+                    chunk = f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+    except FileNotFoundError:
+        # This error won't be caught by Flask's regular error handlers
+        # because it happens inside a generator. We can't easily abort(404).
+        # The stream will just be empty, resulting in a 0-byte response.
+        app.logger.error(f"File '{name}' not found in zip at url {url}")
+    except Exception as e:
+        app.logger.error(f"Error streaming zip file from url {url}: {e}")
 
 @app.route("/preview")
 @with_remote_zip
-def preview_file(url, name):
-    no_verify = request.args.get("no_verify") == "on"
-    session_kwargs = {'verify': not no_verify}
-    with RemoteZip(url, **session_kwargs) as rz:
+def preview_file(url, name, no_verify):
+    with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
         with rz.open(name) as f:
             data = f.read(100*1024)  # limit preview size
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 text = data.decode("latin-1", errors="replace")
-    return f"<h3>Preview of {name}</h3><pre>{text}</pre>"
+    return f"<h3>Preview of {name}</h3><pre>{text}</pre>" # Preview is not streamed, so original logic is fine
 
 @app.route("/image")
 @with_remote_zip
-def preview_image(url, name):
-    no_verify = request.args.get("no_verify") == "on"
-    session_kwargs = {'verify': not no_verify}
-    def generate():
-        with RemoteZip(url, **session_kwargs) as rz:
-            with rz.open(name) as f:
-                while True:
-                    chunk = f.read(64*1024)
-                    if not chunk: break
-                    yield chunk
+def preview_image(url, name, no_verify):
     mime, _ = mimetypes.guess_type(name)
-    return Response(generate(), mimetype=mime or "application/octet-stream")
+    return Response(_stream_zip_file(url, name, no_verify), mimetype=mime or "application/octet-stream")
 
 @app.route("/file")
 @with_remote_zip
-def download_file(url, name):
-    no_verify = request.args.get("no_verify") == "on"
-    session_kwargs = {'verify': not no_verify}
-    def generate():
-        with RemoteZip(url, **session_kwargs) as rz:
-            with rz.open(name) as f:
-                while True:
-                    chunk = f.read(64*1024)
-                    if not chunk: break
-                    yield chunk
+def download_file(url, name, no_verify):
     headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
-    return Response(generate(), headers=headers, mimetype="application/octet-stream")
+    return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
