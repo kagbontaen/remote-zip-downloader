@@ -8,6 +8,7 @@ from cachetools import cached, TTLCache
 
 app = Flask(__name__)
 __version__ = "0.5"
+__version__ = "0.5"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -344,6 +345,8 @@ if __name__ == "__main__":
         atexit.register(lambda: Path(PORT_FILE).unlink(missing_ok=True))
 
     url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
+    url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
     # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
+    Timer(1, lambda: webbrowser.open(url)).start()
     Timer(1, lambda: webbrowser.open(url)).start()
     app.run(debug=True, port=port)
