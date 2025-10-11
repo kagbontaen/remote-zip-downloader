@@ -48,15 +48,15 @@ INDEX_HTML = """
     <input type="search" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
     <div class="grid" style="align-items: end; margin-top: 1.5rem;">
       <div class="grid" style="gap: 0.5rem;">
-        <button id="open-btn" type="submit">Open</button>
-        <button id="clear-btn" type="button" class="secondary">Clear</button>
-      </div>
       <fieldset style="margin: 0;">
         <label for="no_verify">
           <input type="checkbox" id="no_verify" name="no_verify" role="switch" {% if no_verify %}checked{% endif %}>
           Disable SSL verification
         </label>
       </fieldset>
+        <button id="open-btn" type="submit">Open</button>
+        <button id="clear-btn" type="button" class="secondary">Clear</button>
+      </div>
     </div>
   </form>
 
@@ -330,9 +330,9 @@ if __name__ == "__main__":
 
     # Prefer port 80 if available, otherwise fall back to a random port in the range 5000-6000.
     # Note: Binding to port 80 on many systems requires administrator/root privileges.
-    port = 80 if is_port_available(80) else random.randint(5000, 6000)
+    port = 80 if is_port_available(80) else 5000
 
     url = f"http://127.0.0.1:{port}"
     # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
-    Timer(1, lambda: webbrowser.open(url)).start()
+    Timer(1, webbrowser.open(url)).start()
     app.run(debug=True, port=port)
