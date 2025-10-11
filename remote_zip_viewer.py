@@ -17,6 +17,7 @@ INDEX_HTML = """
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Remote ZIP Viewer</title>
+<link rel="icon" href="http://kagbontaen.ucoz.lv/Project1.ico">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
 <style>
   :root { --pico-font-size: 100%; }
