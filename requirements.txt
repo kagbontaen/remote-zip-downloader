@@ -3,6 +3,7 @@
 Flask
 remotezip
 cachetools
+waitress
 
 # --- Development & Testing Dependencies ---
 # For running the test suite
