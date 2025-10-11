@@ -4,6 +4,7 @@ from remotezip import RemoteZip
 from pathlib import Path
 import mimetypes
 from functools import wraps
+from cachetools import cached, TTLCache
 
 app = Flask(__name__)
 __version__ = "0.2"
@@ -80,13 +81,14 @@ INDEX_HTML = """
             <span class="tree-item-label">{{ name }}</span>
             <span class="tree-item-size">{{ node.info.file_size }} bytes</span>
             <div class="tree-item-actions">
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Get File</a>
               {% if node.info.is_text %}
                 <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
               {% endif %}
               {% if node.info.is_image %}
                 <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
               {% endif %}
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Get File</a>
+
             </div>
           </div>
         </li>
@@ -118,12 +120,19 @@ INDEX_HTML = """
 TEXT_EXTS = (".txt",".md",".py",".csv",".log",".json",".xml",".html",".htm",".cfg",".ini",".plist",".yaml",".yml")
 IMAGE_EXTS = (".png",".jpg",".jpeg",".gif",".webp")
 
+# Cache for storing the directory structure of remote ZIP files.
+# It holds up to 100 different URLs and each entry expires after 300 seconds (5 minutes).
+file_list_cache = TTLCache(maxsize=100, ttl=300)
+
 def _get_session_kwargs(no_verify=False):
     """Returns the kwargs for the RemoteZip session."""
     return {'verify': not no_verify}
 
+@cached(file_list_cache)
 def list_entries(url, no_verify=False):
+    """Parses a remote ZIP file and returns its directory structure as a nested dict."""
     tree = {}
+    app.logger.info(f"Cache miss. Fetching and processing directory for {url}")
     with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
         for info in rz.infolist():
             # Skip directory entries, we build the structure from file paths
