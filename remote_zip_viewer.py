@@ -51,7 +51,10 @@ INDEX_HTML = """
           Disable SSL verification
         </label>
       </fieldset>
-      <button type="submit" style="margin-top: 1.5rem;">Open</button>
+      <div class="grid" style="margin-top: 1.5rem; gap: 0.5rem;">
+        <button id="open-btn" type="submit">Open</button>
+        <button id="clear-btn" type="button" class="secondary">Clear</button>
+      </div>
     </div>
   </form>
 
@@ -63,17 +66,17 @@ INDEX_HTML = """
   <article style="margin-top: 2rem;">
     <header>Contents of <a href="{{url}}" target="_blank">{{ url }}</a></header>
     <div class="tree">
-  {% macro render_tree(subtree) %}
+  {% macro render_tree(subtree, prefix='') %}
     <ul>
     {% for name, node in subtree|dictsort %}
       {% if node.type == 'dir' %}
-        <li class="folder" onclick="toggle(event, this)">
+        <li id="folder-{{ (prefix + name)|replace('/', '-') }}" class="folder" onclick="toggle(event, this)">
           <div class="tree-item">
             <svg class="icon icon-closed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
             <svg class="icon icon-open" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-2.06 11L15 15.28 12.06 17l-1.06-1.06L14.44 12 11 8.56 12.06 7.5 15 10.44 17.94 7.5 19 8.56 15.56 12l3.44 3.44L17.94 17z"/></svg>
             <span class="tree-item-label">{{ name }}</span>
           </div>
-          {{ render_tree(node.children) }}
+          {{ render_tree(node.children, prefix + name + '/') }}
         </li>
       {% else %}
         <li class="file">
@@ -97,14 +100,48 @@ INDEX_HTML = """
     {% endfor %}
     </ul>
   {% endmacro %}
-  {{ render_tree(tree) }}
+  {{ render_tree(tree) }} {# Initial call to the macro #}
     </div>
   </article>
   {% endif %}
 <script>
+  const currentUrl = "{{ url or '' }}";
+  const storageKey = `folderState-${currentUrl}`;
+
+  // --- Event Listeners ---
+  document.addEventListener('DOMContentLoaded', () => {
+    // Restore folder state on page load
+    if (currentUrl) {
+      try {
+        const state = JSON.parse(localStorage.getItem(storageKey) || '{}');
+        Object.keys(state).forEach(folderId => {
+          if (state[folderId]) {
+            const element = document.getElementById(folderId);
+            if (element) element.classList.add('expanded');
+          }
+        });
+      } catch (e) { console.error('Could not parse folder state:', e); }
+    }
+
+    // Loading indicator for the "Open" button
+    document.querySelector('form').addEventListener('submit', () => {
+      document.getElementById('open-btn').setAttribute('aria-busy', 'true');
+    });
+
+    // Clear button functionality
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      window.location.href = "{{ url_for('index') }}";
+    });
+  });
+
+  // --- Functions ---
   function toggle(event, element) {
     event.stopPropagation();
     element.classList.toggle('expanded');
+    // Save folder state to localStorage
+    const state = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    state[element.id] = element.classList.contains('expanded');
+    localStorage.setItem(storageKey, JSON.stringify(state));
   }
 </script>
 <footer class="container" style="text-align: center; margin-top: 2rem; color: var(--pico-secondary);">

@@ -8,10 +8,10 @@ This file tracks planned features and improvements for the Remote ZIP Viewer.
 
 ## Medium Priority
 
-- [ ] **Enhance Frontend User Experience (UX):**
-    - [ ] **Preserve Folder State:** Use browser `localStorage` to remember which folders a user has expanded, restoring the view on subsequent visits.
-    - [ ] **Add Loading Indicator:** Show a spinner or "Processing..." message after the "Open" button is clicked to provide immediate feedback.
-    - [ ] **Add Reset Button:** Implement a "Clear" button to easily reset the URL input and file tree.
+- [x] **Enhance Frontend User Experience (UX):**
+    - [x] **Preserve Folder State:** Use browser `localStorage` to remember which folders a user has expanded, restoring the view on subsequent visits.
+    - [x] **Add Loading Indicator:** Show a spinner or "Processing..." message after the "Open" button is clicked to provide immediate feedback.
+    - [x] **Add Reset Button:** Implement a "Clear" button to easily reset the URL input and file tree.
 
 - [ ] **Add Unit and Integration Tests:**
     - [ ] **Unit Tests:** Create tests for `list_entries` using `pytest` and a mock `RemoteZip` object to validate tree generation logic.
