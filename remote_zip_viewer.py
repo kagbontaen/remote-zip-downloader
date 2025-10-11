@@ -147,7 +147,7 @@ INDEX_HTML = """
 <footer class="container" style="text-align: center; margin-top: 2rem; color: var(--pico-secondary);">
   <small>
     Remote ZIP Viewer v{{ version }} | © 2025 <a href="https://kagbontaen.ucoz.lv" target="_blank">Kagbontaen</a> |
-    <a href="https://github.com/kinc-google/remote-zip-downloader" target="_blank">Source Code</a>
+    <a href="https://github.com/kagbontaen/remote-zip-downloader" target="_blank">Source Code</a>
   </small>
 </footer>
 </main>
