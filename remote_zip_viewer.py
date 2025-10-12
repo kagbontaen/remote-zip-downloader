@@ -8,7 +8,6 @@ from cachetools import cached, TTLCache
 
 app = Flask(__name__)
 __version__ = "0.5"
-__version__ = "0.5"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
