@@ -21,6 +21,7 @@ dist/
 # IDE / Editor specific files
 .vscode/
 .idea/
+.vs/
 
 # OS-specific files
 .DS_Store
@@ -28,3 +29,4 @@ Thumbs.db
 
 # Local development artifacts
 .port
+remote-zip-downloader.zip

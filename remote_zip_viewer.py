@@ -312,10 +312,12 @@ def download_file(url, name, no_verify):
     return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
 
 if __name__ == "__main__":
+    # This block is for local development and for running the compiled executable.
     import socket
     import webbrowser
     import atexit
     from threading import Timer
+    from waitress import serve
 
     PORT_FILE = ".port"
     port = None
@@ -348,4 +350,5 @@ if __name__ == "__main__":
     url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
     # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
     Timer(1, lambda: webbrowser.open(url)).start()
-    app.run(debug=True, port=port)
+    print(f"Server starting at {url}")
+    serve(app, host="127.0.0.1", port=port)
