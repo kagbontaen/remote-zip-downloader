@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.6"
+__version__ = "0.6.2"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -96,7 +96,7 @@ INDEX_HTML = """
               {% if node.info.is_image %}
                 <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
               {% endif %}
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Download</a>
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Get File</a>
 
             </div>
           </div>
@@ -118,7 +118,7 @@ INDEX_HTML = """
   document.addEventListener('DOMContentLoaded', () => {
     // Restore folder state on page load
     // Restore download state on page load
-    if (currentUrl) {
+    if (currentUrl && typeof storageKey !== 'undefined') {
       try {
         const state = JSON.parse(localStorage.getItem(storageKey) || '{}');
         Object.keys(state).forEach(folderId => {
@@ -129,7 +129,7 @@ INDEX_HTML = """
         });
       } catch (e) { console.error('Could not parse folder state:', e); }
     }
-    if (currentUrl) {
+    if (currentUrl && typeof downloadStateKey !== 'undefined') {
       try {
         const downloadedFiles = JSON.parse(localStorage.getItem(downloadStateKey) || '[]');
         downloadedFiles.forEach(filename => {
@@ -409,6 +409,66 @@ def _cli_download(file_in_zip, url, output_path, no_verify):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def _cli_download_folder(folder_path, url, output_path, no_verify):
+    """Handles downloading all files within a specified folder in the ZIP."""
+    import time
+
+    print(f"Connecting to {url} to download folder '{folder_path}'...")
+    output_base = Path(output_path)
+
+    # Ensure the base output path exists
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+            # Normalize folder path to end with a slash
+            if not folder_path.endswith('/'):
+                folder_path += '/'
+
+            # Find all files that are inside the specified folder_path
+            files_to_download = [
+                info for info in rz.infolist()
+                if info.filename.startswith(folder_path) and not info.is_dir()
+            ]
+
+            if not files_to_download:
+                print(f"Error: No files found in folder '{folder_path}' or folder does not exist.")
+                return
+
+            print(f"Found {len(files_to_download)} file(s) to download.")
+
+            for i, info in enumerate(files_to_download):
+                # Determine the output path for the file
+                # This preserves the subdirectory structure relative to the output path
+                relative_path = info.filename
+                file_output_path = output_base / relative_path
+
+                # Create parent directories for the file
+                file_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                print(f"\n[{i+1}/{len(files_to_download)}] Downloading '{info.filename}' to '{file_output_path}'...")
+
+                with rz.open(info.filename) as source, open(file_output_path, "wb") as target:
+                    while True:
+                        chunk = source.read(8192)
+                        if not chunk:
+                            break
+                        target.write(chunk)
+            print("\nFolder download complete.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+def _cli_stream_to_console(file_in_zip, url, no_verify):
+    """Handles streaming a file's content directly to standard output."""
+    import sys
+    try:
+        # Write directly to the stdout buffer to handle binary data
+        for chunk in _stream_zip_file(url, file_in_zip, no_verify):
+            sys.stdout.buffer.write(chunk)
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
+
 def main():
     """Main function to run the web server or handle CLI commands."""
     import socket
@@ -446,19 +506,49 @@ def main():
         # Register a function to clean up the file on exit
         atexit.register(lambda: Path(PORT_FILE).unlink(missing_ok=True))
     
-    # If command-line arguments are provided, switch to CLI mode
-    if len(sys.argv) > 1:
-        parser = argparse.ArgumentParser(
-            description="Download a single file from a remote ZIP archive.",
-            usage="%(prog)s [file_in_zip] [url] [output_location] [--no-verify]"
-        )
-        parser.add_argument("file_in_zip", help="The full path to the file inside the ZIP archive.")
-        parser.add_argument("url", help="The URL of the remote ZIP archive.")
-        parser.add_argument("output_location", help="The local path to save the file (can be a directory).")
-        parser.add_argument("--no-verify", action="store_true", help="Disable SSL certificate verification.")
+    parser = argparse.ArgumentParser(
+        description="Remote ZIP Viewer and Downloader. Runs as a web UI by default.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    
+    # CLI arguments
+    parser.add_argument('-f', '--file', dest='file_in_zip', help='The full path to the file inside the ZIP archive. (Triggers CLI mode)')
+    parser.add_argument('-u', '--url', dest='url_cli', help='The URL of the remote ZIP archive. (Triggers CLI mode)')
+    
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument('-o', '--output', dest='output_location', default='.', help='Local path to save the file. Defaults to current directory.')
+    output_group.add_argument('-c', '--console', action='store_true', help='Stream file content to standard output.')
+    
+    # General arguments
+    parser.add_argument('-n', '--no-verify', action='store_true', help='Disable SSL certificate verification (applies to both modes).')
+
+    args = parser.parse_args()
+
+    # If file or url arguments are provided, run in command-line mode
+    if args.file_in_zip or args.url_cli:
+        if not args.file_in_zip or not args.url_cli:
+            parser.error("both -f/--file and -u/--url are required for CLI mode.")
+
+        # Check if the file path indicates a folder download
+        is_folder_download = '*' in args.file_in_zip or args.file_in_zip.endswith('/')
         
-        args = parser.parse_args()
-        _cli_download(args.file_in_zip, args.url, args.output_location, args.no_verify)
+        if is_folder_download:
+            if args.console:
+                print("Warning: The -c/--console option is ignored when downloading a folder.", file=sys.stderr)
+            
+            # Normalize path for folder download (remove wildcard)
+            folder_path = args.file_in_zip
+            if '*' in folder_path:
+                folder_path = str(Path(folder_path).parent)
+                if folder_path == '.': folder_path = '' # Handle root wildcard
+
+            _cli_download_folder(folder_path, args.url_cli, args.output_location, args.no_verify)
+        else:
+            # Standard single file operation
+            if args.console:
+                _cli_stream_to_console(args.file_in_zip, args.url_cli, args.no_verify)
+            else:
+                _cli_download(args.file_in_zip, args.url_cli, args.output_location, args.no_verify)
     else:
         # Otherwise, start the web server
         url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
