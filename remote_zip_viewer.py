@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.5"
+__version__ = "0.5.1"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -28,8 +28,8 @@ INDEX_HTML = """
   .tree-item { display: flex; align-items: center; gap: 0.5rem; }
   .tree-item-label { flex-grow: 1; }
   .tree-item-size { color: var(--pico-secondary); font-size: 0.9em; min-width: 100px; text-align: right; }
-  .tree-item-actions { display: flex; justify-content: flex-end; gap: 0.5rem; min-width: 320px; }
-  .tree-item-actions a[role="button"] { width: 100px; margin: 0; padding: 0.5rem 0.75rem; }
+  .tree-item-actions { display: flex; justify-content: flex-end; gap: 0.5rem; min-width: 380px; }
+  .tree-item-actions a[role="button"] { width: 120px; margin: 0; padding: 0.5rem 0; text-align: center; white-space: nowrap; }
   .folder > .tree-item { cursor: pointer; font-weight: bold; }
   .folder > ul { display: none; }
   .folder.expanded > ul { display: block; }
@@ -96,7 +96,7 @@ INDEX_HTML = """
               {% if node.info.is_image %}
                 <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
               {% endif %}
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Get File</a>
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Download</a>
 
             </div>
           </div>
@@ -111,11 +111,13 @@ INDEX_HTML = """
   {% endif %}
 <script>
   const currentUrl = "{{ url or '' }}";
-  const storageKey = `folderState-${currentUrl}`;
+  const folderStateKey = `folderState-${currentUrl}`;
+  const downloadStateKey = `downloadState-${currentUrl}`;
 
   // --- Event Listeners ---
   document.addEventListener('DOMContentLoaded', () => {
     // Restore folder state on page load
+    // Restore download state on page load
     if (currentUrl) {
       try {
         const state = JSON.parse(localStorage.getItem(storageKey) || '{}');
@@ -127,6 +129,16 @@ INDEX_HTML = """
         });
       } catch (e) { console.error('Could not parse folder state:', e); }
     }
+    if (currentUrl) {
+      try {
+        const downloadedFiles = JSON.parse(localStorage.getItem(downloadStateKey) || '[]');
+        downloadedFiles.forEach(filename => {
+          const btn = document.querySelector(`.download-btn[data-filename="${filename}"]`);
+          if (btn) updateDownloadButton(btn);
+        });
+      } catch (e) { console.error('Could not parse download state:', e); }
+    }
+
 
     // Loading indicator for the "Open" button
     document.querySelector('form').addEventListener('submit', () => {
@@ -136,6 +148,18 @@ INDEX_HTML = """
     // Clear button functionality
     document.getElementById('clear-btn').addEventListener('click', () => {
       window.location.href = "{{ url_for('index') }}";
+    });
+
+    // Add click listeners for all download buttons
+    document.querySelectorAll('.download-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const filename = btn.dataset.filename;
+        let downloadedFiles = JSON.parse(localStorage.getItem(downloadStateKey) || '[]');
+        if (!downloadedFiles.includes(filename)) {
+          downloadedFiles.push(filename);
+          localStorage.setItem(downloadStateKey, JSON.stringify(downloadedFiles));
+        }
+      });
     });
   });
   
@@ -178,9 +202,15 @@ INDEX_HTML = """
     event.stopPropagation();
     element.classList.toggle('expanded');
     // Save folder state to localStorage
-    const state = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    const state = JSON.parse(localStorage.getItem(folderStateKey) || '{}');
     state[element.id] = element.classList.contains('expanded');
-    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.setItem(folderStateKey, JSON.stringify(state));
+  }
+
+  function updateDownloadButton(btn) {
+    btn.textContent = 'Downloaded';
+    btn.setAttribute('disabled', '');
+    btn.classList.remove('secondary');
   }
 </script>
 <footer class="container" style="text-align: center; margin-top: 2rem; color: var(--pico-secondary);">

@@ -22,6 +22,7 @@ A single-file Flask web application to browse, preview, and download the content
 -   **Performance Caching**: Caches the file directory for recently accessed URLs to provide near-instant subsequent loads.
 -   **Real-time Search**: Instantly filter the file tree to find specific files or folders.
 -   **Persistent State**: Remembers which folders you've expanded for a given URL.
+-   **Download Tracking**: Visually marks files that have been downloaded during your session.
 
 ## Installation
 
