@@ -341,44 +341,47 @@ def download_file(url, name, no_verify):
     headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
     return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
 
-if __name__ == "__main__":
-    # This block is for local development and for running the compiled executable.
+def main():
+    """Main function to run the web server."""
     import socket
     import webbrowser
     import atexit
     from threading import Timer
     from waitress import serve
-
+    
     PORT_FILE = ".port"
     port = None
-
+    
     # Try to read the port from a file to maintain it across reloads
     try:
         with open(PORT_FILE, "r") as f:
             port = int(f.read())
     except (FileNotFoundError, ValueError):
         # If the file doesn't exist or is invalid, find a new port
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(("127.0.0.1", 80))
             port = 80
+            sock.close()
         except (socket.error, OSError):
             import random
             port = random.randint(5000, 6000)
             print(f"Port 80 not available. do you have IIS running on port 80?")
             print(f"Using a random port between 5000 and 6000 instead.")
             print(f" Using random port: {port}")
-        finally:
-            sock.close()
         
         # Save the chosen port for next time
         with open(PORT_FILE, "w") as f:
             f.write(str(port))
         # Register a function to clean up the file on exit
         atexit.register(lambda: Path(PORT_FILE).unlink(missing_ok=True))
-
+    
     url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
     # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
-    Timer(1, lambda: webbrowser.open(url)).start()
     print(f"Server starting at {url}")
     serve(app, host="127.0.0.1", port=port)
+    Timer(1, lambda: webbrowser.open(url)).start()
+
+if __name__ == "__main__":
+    # This block is for local development and for running the compiled executable.
+    main()
