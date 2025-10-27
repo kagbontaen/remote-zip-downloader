@@ -7,7 +7,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.5.1"
+__version__ = "0.6"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -87,8 +87,8 @@ INDEX_HTML = """
         <li class="file">
           <div class="tree-item">
             <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/></svg>
-            <span class="tree-item-label">{{ name }}</span>
-            <span class="tree-item-size">{{ node.info.file_size }} bytes</span>
+            <span class="tree-item-label" title="{{ name }}">{{ name }}</span>
+            <span class="tree-item-size">{{ node.info.file_size|format_bytes }}</span>
             <div class="tree-item-actions">
               {% if node.info.is_text %}
                 <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
@@ -227,6 +227,21 @@ INDEX_HTML = """
 TEXT_EXTS = (".txt",".md",".py",".csv",".log",".json",".xml",".html",".htm",".cfg",".ini",".plist",".yaml",".yml")
 IMAGE_EXTS = (".png",".jpg",".jpeg",".gif",".webp")
 
+@app.template_filter('format_bytes')
+def format_bytes(size):
+    """Formats a file size in bytes into a human-readable string."""
+    if size is None:
+        return "0 bytes"
+    power = 1024
+    n = 0
+    power_labels = {0: 'bytes', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
+    while size >= power and n < len(power_labels) - 1:
+        size /= power
+        n += 1
+    if n == 0:
+        return f"{int(size)} {power_labels[n]}"
+    return f"{size:.2f} {power_labels[n]}"
+
 # Cache for storing the directory structure of remote ZIP files.
 # It holds up to 100 different URLs and each entry expires after 300 seconds (5 minutes).
 file_list_cache = TTLCache(maxsize=100, ttl=300)
@@ -341,13 +356,68 @@ def download_file(url, name, no_verify):
     headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
     return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
 
+def _cli_download(file_in_zip, url, output_path, no_verify):
+    """Handles the command-line download operation with progress display."""
+    import time
+
+    print(f"Connecting to {url}...")
+    output = Path(output_path)
+
+    # If output_path is a directory, use the original filename
+    if output.is_dir():
+        output = output / Path(file_in_zip).name
+
+    # Create parent directories if they don't exist
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+            try:
+                info = rz.getinfo(file_in_zip)
+                total_size = info.file_size
+            except KeyError:
+                print(f"Error: File '{file_in_zip}' not found in the remote archive.")
+                return
+
+            print(f"Downloading '{file_in_zip}' ({total_size} bytes) to '{output}'...")
+
+            downloaded_bytes = 0
+            start_time = time.time()
+
+            with rz.open(file_in_zip) as source, open(output, "wb") as target:
+                while True:
+                    chunk = source.read(8192)
+                    if not chunk:
+                        break
+                    target.write(chunk)
+                    downloaded_bytes += len(chunk)
+
+                    elapsed_time = time.time() - start_time
+                    speed = downloaded_bytes / elapsed_time if elapsed_time > 0 else 0
+                    speed_mbps = (speed * 8) / (1024 * 1024)
+                    
+                    percent = (downloaded_bytes / total_size) * 100 if total_size > 0 else 100
+                    
+                    progress_bar = f"[{'=' * int(percent / 2):<50}]"
+                    
+                    # Use \r to return to the beginning of the line
+                    print(f"\r{progress_bar} {percent:.1f}% - {downloaded_bytes/1024/1024:.2f}MB - {speed_mbps:.2f} Mbps", end="")
+
+            # Print a newline at the end
+            print("\nDownload complete.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 def main():
-    """Main function to run the web server."""
+    """Main function to run the web server or handle CLI commands."""
     import socket
     import webbrowser
     import atexit
     from threading import Timer
     from waitress import serve
+    import sys
+    import argparse
     
     PORT_FILE = ".port"
     port = None
@@ -376,11 +446,25 @@ def main():
         # Register a function to clean up the file on exit
         atexit.register(lambda: Path(PORT_FILE).unlink(missing_ok=True))
     
-    url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
-    # Open the URL in a new browser tab after a 1-second delay to allow the server to start.
-    print(f"Server starting at {url}")
-    serve(app, host="127.0.0.1", port=port)
-    Timer(1, lambda: webbrowser.open(url)).start()
+    # If command-line arguments are provided, switch to CLI mode
+    if len(sys.argv) > 1:
+        parser = argparse.ArgumentParser(
+            description="Download a single file from a remote ZIP archive.",
+            usage="%(prog)s [file_in_zip] [url] [output_location] [--no-verify]"
+        )
+        parser.add_argument("file_in_zip", help="The full path to the file inside the ZIP archive.")
+        parser.add_argument("url", help="The URL of the remote ZIP archive.")
+        parser.add_argument("output_location", help="The local path to save the file (can be a directory).")
+        parser.add_argument("--no-verify", action="store_true", help="Disable SSL certificate verification.")
+        
+        args = parser.parse_args()
+        _cli_download(args.file_in_zip, args.url, args.output_location, args.no_verify)
+    else:
+        # Otherwise, start the web server
+        url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
+        print(f"Server starting at {url}")
+        Timer(1, lambda: webbrowser.open(url)).start()
+        serve(app, host="127.0.0.1", port=port)
 
 if __name__ == "__main__":
     # This block is for local development and for running the compiled executable.
