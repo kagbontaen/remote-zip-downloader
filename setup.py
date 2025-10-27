@@ -39,7 +39,7 @@ setup(
     }],
     options={
         'py2exe': {
-            'bundle_files': 1, # Creates a single-file executable
+            'bundle_files': 3, # Creates a single-file executable
             'compressed': True,
         }
     },
