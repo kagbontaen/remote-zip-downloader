@@ -56,7 +56,7 @@ Run the Flask development server:
 python remote_zip_viewer.py
 ```
 
-Open your web browser and navigate to `http://127.0.0.1:5000`.
+Open your web browser and navigate to `http://127.0.0.1`.
 
 ## Development & Testing
 
