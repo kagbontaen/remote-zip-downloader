@@ -30,3 +30,4 @@ Thumbs.db
 # Local development artifacts
 .port
 remote-zip-downloader.zip
+output.zip

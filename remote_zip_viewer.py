@@ -1,4 +1,35 @@
-# remote_zip_viewer_remotezip.py
+def _ensure_dependencies():
+    """
+    Checks for required packages and prompts for installation if they are missing.
+    This makes the script more portable by handling its own dependencies.
+    """
+    import sys
+    import subprocess
+    
+    # List of required packages and their corresponding import names
+    required_packages = {
+        'Flask': 'flask',
+        'remotezip': 'remotezip',
+        'cachetools': 'cachetools',
+        'waitress': 'waitress'
+    }
+    
+    missing_packages = []
+    for package, import_name in required_packages.items():
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing_packages.append(package)
+            
+    if missing_packages:
+        print(f"The following required packages are missing: {', '.join(missing_packages)}")
+        print("Attempting to install them now...")
+        python_executable = sys.executable
+        subprocess.check_call([python_executable, "-m", "pip", "install", *missing_packages])
+        sys.exit("\nDependencies installed successfully. Please run the script again.")
+
+_ensure_dependencies()
+
 from flask import Flask, request, render_template_string, Response, redirect, url_for, abort
 from remotezip import RemoteZip
 from pathlib import Path
@@ -7,7 +38,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.6.2"
+__version__ = "0.7.1"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -46,13 +77,29 @@ INDEX_HTML = """
   <form action="{{ url_for('view') }}" method="get">
     <label for="url">Remote ZIP URL</label>
     <input type="search" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
+    <div id="auth-fields" class="{% if not user %}hidden{% endif %}">
+      <div class="grid">
+        <div>
+          <label for="user">Username (optional)</label>
+          <input type="text" id="user" name="user" value="{{ user or '' }}" placeholder=" ">
+        </div>
+        <div>
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" value="{{ password or '' }}" placeholder=" ">
+        </div>
+      </div>
+    </div>
     <div class="grid" style="align-items: end; margin-top: 1.5rem;">
       <div class="grid" style="gap: 0.5rem;">
-      <fieldset style="margin: 0;">
-        <label for="no_verify">
-          <input type="checkbox" id="no_verify" name="no_verify" role="switch" {% if no_verify %}checked{% endif %}>
-          Disable SSL verification
-        </label>
+      <fieldset class="grid" style="margin: 0; gap: 2rem;">
+          <label for="auth_switch">
+            <input type="checkbox" id="auth_switch" name="auth_switch" role="switch" {% if user %}checked{% endif %}>
+            Authentication
+          </label>
+          <label for="no_verify">
+            <input type="checkbox" id="no_verify" name="no_verify" role="switch" {% if no_verify %}checked{% endif %}>
+            Disable SSL verification
+          </label>
       </fieldset>
         <button id="open-btn" type="submit">Open</button>
         <button id="clear-btn" type="button" class="secondary">Clear</button>
@@ -91,12 +138,12 @@ INDEX_HTML = """
             <span class="tree-item-size">{{ node.info.file_size|format_bytes }}</span>
             <div class="tree-item-actions">
               {% if node.info.is_text %}
-                <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
+                <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
               {% endif %}
               {% if node.info.is_image %}
-                <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
+                <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
               {% endif %}
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Get File</a>
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Get File</a>
 
             </div>
           </div>
@@ -161,6 +208,20 @@ INDEX_HTML = """
         }
       });
     });
+
+    // Toggle auth fields visibility
+    const authSwitch = document.getElementById('auth_switch');
+    const authFields = document.getElementById('auth-fields');
+    if (authSwitch && authFields) {
+        authSwitch.addEventListener('change', () => {
+            authFields.classList.toggle('hidden', !authSwitch.checked);
+            // Clear fields when hiding
+            if (!authSwitch.checked) {
+                document.getElementById('user').value = '';
+                document.getElementById('password').value = '';
+            }
+        });
+    }
   });
   
   // Search functionality
@@ -246,16 +307,20 @@ def format_bytes(size):
 # It holds up to 100 different URLs and each entry expires after 300 seconds (5 minutes).
 file_list_cache = TTLCache(maxsize=100, ttl=300)
 
-def _get_session_kwargs(no_verify=False):
+def _get_session_kwargs(insecure=False, auth=None):
     """Returns the kwargs for the RemoteZip session."""
-    return {'verify': not no_verify}
+    kwargs = {'verify': not insecure}
+    if auth:
+        kwargs['auth'] = auth
+    return kwargs
 
 @cached(file_list_cache)
-def list_entries(url, no_verify=False):
+def list_entries(url, insecure=False, auth=None):
     """Parses a remote ZIP file and returns its directory structure as a nested dict."""
     tree = {}
+    kwargs = _get_session_kwargs(insecure, auth)
     app.logger.info(f"Cache miss. Fetching and processing directory for {url}")
-    with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+    with RemoteZip(url, **kwargs) as rz:
         for info in rz.infolist():
             # Skip directory entries, we build the structure from file paths
             if info.is_dir():
@@ -289,35 +354,49 @@ def index():
 @app.route("/view")
 def view():
     url = request.args.get("url")
-    no_verify = request.args.get("no_verify") == "on"
+    insecure = request.args.get("no_verify") == "on"
+    user = request.args.get("user")
+    password = request.args.get("password")
+
     if not url: return redirect(url_for("index"))
+
+    auth = None
+    if user:
+        auth = (user, password or '')
+
     try:
-        tree = list_entries(url, no_verify=no_verify)
-        return render_template_string(INDEX_HTML, tree=tree, url=url, no_verify=no_verify)
+        tree = list_entries(url, insecure=insecure, auth=auth)
+        return render_template_string(INDEX_HTML, tree=tree, url=url, no_verify=insecure, user=user, password=password)
     except Exception as e:
-        return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=no_verify)
+        return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=insecure, user=user, password=password)
 
 def with_remote_zip(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         url = request.args.get("url")
         name = request.args.get("name")
-        no_verify = request.args.get("no_verify") == "on"
+        insecure = request.args.get("no_verify") == "on"
+        user = request.args.get("user")
+        password = request.args.get("password")
 
         if not url or not name:
             abort(400, "Missing 'url' or 'name' parameter.")
         
+        auth = None
+        if user:
+            auth = (user, password or '')
+
         # Pass the parsed arguments to the decorated function
-        return f(url, name, no_verify, *args, **kwargs)
+        return f(url, name, insecure, auth, *args, **kwargs)
     return decorated_function
 
-def _stream_zip_file(url, name, no_verify):
+def _stream_zip_file(url, name, insecure, auth=None):
     """
     A generator that creates a RemoteZip instance and streams a file from it.
     This ensures the RemoteZip object remains open during the entire stream.
     """
     try:
-        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
             with rz.open(name) as f:
                 while True:
                     chunk = f.read(64 * 1024)
@@ -334,8 +413,8 @@ def _stream_zip_file(url, name, no_verify):
 
 @app.route("/preview")
 @with_remote_zip
-def preview_file(url, name, no_verify):
-    with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+def preview_file(url, name, insecure, auth):
+    with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
         with rz.open(name) as f:
             data = f.read(100*1024)  # limit preview size
             try:
@@ -346,33 +425,36 @@ def preview_file(url, name, no_verify):
 
 @app.route("/image")
 @with_remote_zip
-def preview_image(url, name, no_verify):
+def preview_image(url, name, insecure, auth):
     mime, _ = mimetypes.guess_type(name)
-    return Response(_stream_zip_file(url, name, no_verify), mimetype=mime or "application/octet-stream")
+    return Response(_stream_zip_file(url, name, insecure, auth), mimetype=mime or "application/octet-stream")
 
 @app.route("/file")
 @with_remote_zip
-def download_file(url, name, no_verify):
+def download_file(url, name, insecure, auth):
     headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
-    return Response(_stream_zip_file(url, name, no_verify), headers=headers, mimetype="application/octet-stream")
+    return Response(_stream_zip_file(url, name, insecure, auth), headers=headers, mimetype="application/octet-stream")
 
-def _cli_download(file_in_zip, url, output_path, no_verify):
+def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
     """Handles the command-line download operation with progress display."""
     import time
-
+    
     print(f"Connecting to {url}...")
     output = Path(output_path)
 
-    # If output_path is a directory, use the original filename
     if output.is_dir():
         output = output / Path(file_in_zip).name
 
-    # Create parent directories if they don't exist
+    # If create_dirs is specified, create the full path
+    if create_dirs:
+        output = Path(output_path) / file_in_zip
+
     output.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
             try:
+                print(f"Searching for '{file_in_zip}' in archive...")
                 info = rz.getinfo(file_in_zip)
                 total_size = info.file_size
             except KeyError:
@@ -409,7 +491,7 @@ def _cli_download(file_in_zip, url, output_path, no_verify):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def _cli_download_folder(folder_path, url, output_path, no_verify):
+def _cli_download_folder(folder_path, url, output_path, insecure, auth):
     """Handles downloading all files within a specified folder in the ZIP."""
     import time
 
@@ -420,7 +502,7 @@ def _cli_download_folder(folder_path, url, output_path, no_verify):
     output_base.mkdir(parents=True, exist_ok=True)
 
     try:
-        with RemoteZip(url, **_get_session_kwargs(no_verify)) as rz:
+        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
             # Normalize folder path to end with a slash
             if not folder_path.endswith('/'):
                 folder_path += '/'
@@ -459,15 +541,51 @@ def _cli_download_folder(folder_path, url, output_path, no_verify):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def _cli_stream_to_console(file_in_zip, url, no_verify):
+def _cli_stream_to_console(file_in_zip, url, insecure, auth):
     """Handles streaming a file's content directly to standard output."""
     import sys
     try:
         # Write directly to the stdout buffer to handle binary data
-        for chunk in _stream_zip_file(url, file_in_zip, no_verify):
+        for chunk in _stream_zip_file(url, file_in_zip, insecure, auth):
             sys.stdout.buffer.write(chunk)
     except Exception as e:
         print(f"An error occurred: {e}", file=sys.stderr)
+
+def _cli_list_files(url, list_path, no_subdirs, insecure, auth):
+    """Lists files and directories from the remote ZIP."""
+    from fnmatch import fnmatch
+
+    print(f"Fetching file list from {url}...")
+    try:
+        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
+            all_files = [info.filename for info in rz.infolist() if not info.is_dir()]
+
+        if list_path:
+            # Normalize list_path to ensure it's treated as a directory
+            if not list_path.endswith('/'):
+                list_path += '/'
+            
+            # Filter files that are directly within the list_path
+            if no_subdirs:
+                # Show only files directly in list_path, no deeper
+                files_to_show = [f for f in all_files if f.startswith(list_path) and '/' not in f[len(list_path):]]
+            else:
+                # Show all files and subdirs under list_path
+                files_to_show = [f for f in all_files if f.startswith(list_path)]
+        else:
+            # Listing from the root
+            if no_subdirs:
+                # Show only files in the root
+                files_to_show = [f for f in all_files if '/' not in f]
+            else:
+                # Show all files
+                files_to_show = all_files
+
+        print("\nContents:")
+        for filename in sorted(files_to_show):
+            print(filename)
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 def main():
     """Main function to run the web server or handle CLI commands."""
@@ -507,48 +625,69 @@ def main():
         atexit.register(lambda: Path(PORT_FILE).unlink(missing_ok=True))
     
     parser = argparse.ArgumentParser(
-        description="Remote ZIP Viewer and Downloader. Runs as a web UI by default.",
+        description="Remote ZIP Viewer and Downloader. Run without arguments to start the web UI.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
-    # CLI arguments
-    parser.add_argument('-f', '--file', dest='file_in_zip', help='The full path to the file inside the ZIP archive. (Triggers CLI mode)')
-    parser.add_argument('-u', '--url', dest='url_cli', help='The URL of the remote ZIP archive. (Triggers CLI mode)')
-    
-    output_group = parser.add_mutually_exclusive_group()
-    output_group.add_argument('-o', '--output', dest='output_location', default='.', help='Local path to save the file. Defaults to current directory.')
-    output_group.add_argument('-c', '--console', action='store_true', help='Stream file content to standard output.')
-    
-    # General arguments
-    parser.add_argument('-n', '--no-verify', action='store_true', help='Disable SSL certificate verification (applies to both modes).')
+    # --- CLI Mode Arguments ---
+    cli_group = parser.add_argument_group('CLI Mode Options')
+    cli_group.add_argument('url', nargs='?', help='The URL of the remote ZIP archive.')
+
+    # Listing files
+    cli_group.add_argument('-l', '--list', nargs='?', const='', default=None, dest='list_path',
+                           help="Shows contents of the zip. Optionally specify a path to list its contents.")
+    cli_group.add_argument('--nosubdirs', action='store_true',
+                           help="Don't show subdirectories. Used with -l or --list.")
+
+    # Downloading files/directories
+    cli_group.add_argument('-g', '--get', dest='get_path',
+                           help='Path to a remote file or directory to download.')
+    cli_group.add_argument('-d', '--directory', action='store_true',
+                           help='Treat the path from -g/--get as a directory and download recursively.')
+    cli_group.add_argument('-o', '--output', dest='output_path', default='.',
+                           help='Specify destination path for downloads. Defaults to the current directory.')
+    cli_group.add_argument('-c', '--create-directories', action='store_true',
+                           help="Create the full directory structure for a downloaded file.")
+
+    # Authentication and Security
+    cli_group.add_argument('-u', '--user', dest='auth_user',
+                           help='Authenticate to the web server. Format: user[:password]')
+    cli_group.add_argument('-k', '--insecure', action='store_true',
+                           help='Disable SSL certificate verification.')
 
     args = parser.parse_args()
 
-    # If file or url arguments are provided, run in command-line mode
-    if args.file_in_zip or args.url_cli:
-        if not args.file_in_zip or not args.url_cli:
-            parser.error("both -f/--file and -u/--url are required for CLI mode.")
+    # Determine if we are in CLI mode
+    is_cli_mode = args.url or args.list_path is not None or args.get_path
 
-        # Check if the file path indicates a folder download
-        is_folder_download = '*' in args.file_in_zip or args.file_in_zip.endswith('/')
-        
-        if is_folder_download:
-            if args.console:
-                print("Warning: The -c/--console option is ignored when downloading a folder.", file=sys.stderr)
-            
-            # Normalize path for folder download (remove wildcard)
-            folder_path = args.file_in_zip
-            if '*' in folder_path:
-                folder_path = str(Path(folder_path).parent)
-                if folder_path == '.': folder_path = '' # Handle root wildcard
+    if is_cli_mode:
+        if not args.url:
+            parser.error("The 'url' argument is required for CLI mode.")
 
-            _cli_download_folder(folder_path, args.url_cli, args.output_location, args.no_verify)
-        else:
-            # Standard single file operation
-            if args.console:
-                _cli_stream_to_console(args.file_in_zip, args.url_cli, args.no_verify)
+        # --- Authentication ---
+        auth = None
+        if args.auth_user:
+            if ':' in args.auth_user:
+                user, pw = args.auth_user.split(':', 1)
+                auth = (user, pw)
             else:
-                _cli_download(args.file_in_zip, args.url_cli, args.output_location, args.no_verify)
+                auth = (args.auth_user, '')
+
+        # --- Action: List Files ---
+        if args.list_path is not None:
+            _cli_list_files(args.url, args.list_path, args.nosubdirs, args.insecure, auth)
+
+        # --- Action: Get File/Directory ---
+        elif args.get_path:
+            if args.directory:
+                # Download a directory
+                _cli_download_folder(args.get_path, args.url, args.output_path, args.insecure, auth)
+            else:
+                # Download a single file
+                _cli_download(args.get_path, args.url, args.output_path, args.insecure, auth, args.create_directories)
+        else:
+            print("No action specified. Use -l/--list to list files or -g/--get to download.", file=sys.stderr)
+
     else:
         # Otherwise, start the web server
         url = f"http://127.0.0.1{f':{port}' if port != 80 else ''}"
