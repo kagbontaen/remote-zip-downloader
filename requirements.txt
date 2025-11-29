@@ -1,12 +1,17 @@
 # --- Application Dependencies ---
 # Core web framework and remote file access
 Flask
-remotezip
 cachetools
-gunicorn
+remotezip
 waitress
+
 # --- Development & Testing Dependencies ---
 # For running the test suite
 pytest
 pytest-flask
 pytest-mock
+flake8
+
+# --- Build Dependencies ---
+PyInstaller
+py2exe

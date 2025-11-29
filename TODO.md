@@ -1,26 +1,23 @@
-# Project TODO List & Roadmap
+# Project TODO List
 
-This file tracks planned features and improvements for the Remote ZIP Viewer.
+## Completed
 
-## High Priority
+- [x] Create core web interface with Flask.
+- [x] Implement remote ZIP file browsing using `remotezip`.
+- [x] Add file preview for text and image files.
+- [x] Add individual file download functionality.
+- [x] Implement a command-line interface (CLI) for listing and downloading.
+- [x] Add support for password-protected ZIP archives.
+- [x] Implement robust error handling for missing/incorrect ZIP passwords.
+- [x] Improve security by removing credentials from URL parameters.
+- [x] Use secure server-side sessions for handling HTTP and ZIP passwords.
+- [x] Add a file browser for local files.
 
-- [x] **Implement Caching for File Lists:** Introduce a time-based in-memory cache (e.g., using `cachetools`) for the `list_entries` function. This will prevent re-fetching and re-processing the ZIP directory on every page load for the same URL, providing a major performance boost.
+## Future Ideas & Enhancements
 
-## Medium Priority
-
-- [x] **Enhance Frontend User Experience (UX):**
-    - [x] **Preserve Folder State:** Use browser `localStorage` to remember which folders a user has expanded, restoring the view on subsequent visits.
-    - [x] **Add Loading Indicator:** Show a spinner or "Processing..." message after the "Open" button is clicked to provide immediate feedback.
-    - [x] **Add Reset Button:** Implement a "Clear" button to easily reset the URL input and file tree.
-
-- [x] **Add Unit and Integration Tests:**
-    - [x] **Unit Tests:** Create tests for `list_entries` using `pytest` and a mock `RemoteZip` object to validate tree generation logic.
-    - [x] **Integration Tests:** Use Flask's test client to simulate requests to all routes (`/`, `/view`, `/file`, `/preview`, `/image`) to ensure they function correctly.
-
-## Low Priority / Future Ideas
-
-- [ ] **Expand Functionality:**
-    - [x] **File Search/Filter:** Add a client-side search box to filter the file tree in real-time. (Improved in v0.3)
-    - [ ] **Support for Authenticated URLs:** Allow passing authentication headers (e.g., Bearer tokens) for accessing private ZIP archives.
-    - [x] **CLI Folder Downloads:** Add support for downloading entire folders from the command line.
-    - [ ] **Download Selected as ZIP:** Add checkboxes to files/folders and a "Download Selected" button to stream a new ZIP containing only the chosen items.
+- [ ] Add a "Download Folder" button to the web UI.
+- [ ] Add a "Download All" button to get the entire original ZIP file.
+- [ ] Write comprehensive tests for new features (session handling, password errors).
+- [ ] Improve UI/UX, possibly with a more modern frontend framework or library.
+- [ ] Add support for other archive formats (e.g., `.tar.gz`, `.7z`).
+- [ ] Create a Dockerfile for easy containerized deployment.

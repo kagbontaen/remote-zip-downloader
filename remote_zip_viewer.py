@@ -34,16 +34,18 @@ def _ensure_dependencies():
 
 _ensure_dependencies()
 
-from flask import Flask, request, render_template_string, Response, redirect, url_for, abort
+from flask import Flask, request, render_template_string, Response, redirect, url_for, abort, session
 from remotezip import RemoteZip
 from pathlib import Path
 import mimetypes
 import zipfile
 from functools import wraps
 from cachetools import cached, TTLCache
+import os
 
 app = Flask(__name__)
-__version__ = "0.8.1"
+__version__ = "0.8.3"
+app.secret_key = os.urandom(24) # Needed for secure session management
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -97,6 +99,10 @@ INDEX_HTML = """
         </div>
       </div>
     </div>
+    <div>
+      <label for="zip_password">ZIP Password (if archive is encrypted)</label>
+      <input type="password" id="zip_password" name="zip_password" value="{{ zip_password or '' }}" placeholder=" ">
+    </div>
     <div class="grid" style="align-items: end; margin-top: 1.5rem;">
       <div class="grid" style="gap: 0.5rem;">
       <fieldset class="grid" style="margin: 0; gap: 2rem;">
@@ -146,12 +152,12 @@ INDEX_HTML = """
             <span class="tree-item-size">{{ node.info.file_size|format_bytes }}</span>
             <div class="tree-item-actions">
               {% if node.info.is_text %}
-                <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
+                <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
               {% endif %}
               {% if node.info.is_image %}
-                <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
+                <a href="{{ url_for('preview_image') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Image</a>
               {% endif %}
-              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}{% if user %}&user={{ user|urlencode }}{% endif %}{% if password %}&password={{ password|urlencode }}{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Get File</a>
+              <a href="{{ url_for('download_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm download-btn" data-filename="{{ node.info.filename }}">Get File</a>
 
             </div>
           </div>
@@ -328,22 +334,33 @@ def _get_session_kwargs(insecure=False, auth=None):
         kwargs['auth'] = auth
     return kwargs
 
+def get_zip_context(url, insecure=False, auth=None, is_retry=False):
+    """
+    Returns a context manager for a local or remote zip file.
+    Automatically retries with SSL verification disabled on SSLCertVerificationError.
+    """
+    from requests.exceptions import SSLError
+
+    if is_local_path(url):
+        return zipfile.ZipFile(url, 'r')
+
+    kwargs = _get_session_kwargs(insecure, auth)
+    try:
+        app.logger.info(f"Attempting to connect to {url} with verify={kwargs.get('verify')}")
+        return RemoteZip(url, **kwargs)
+    except SSLError as e:
+        # If it's a cert verification error and we haven't already retried, try again with verification off.
+        if not insecure and not is_retry and 'CERTIFICATE_VERIFY_FAILED' in str(e):
+            app.logger.warning("SSL certificate verification failed. Retrying automatically with verification disabled.")
+            return get_zip_context(url, insecure=True, auth=auth, is_retry=True)
+        raise  # Re-raise the exception if it's not the one we're handling or if we've already retried.
+
 @cached(file_list_cache)
 def list_entries(url, insecure=False, auth=None):
     """Parses a remote or local ZIP file and returns its directory structure as a nested dict."""
     tree = {}
-    
-    is_local = is_local_path(url)
-    
-    if is_local:
-        app.logger.info(f"Cache miss. Processing local file directory for {url}")
-        zip_context = zipfile.ZipFile(url, 'r')
-    else:
-        kwargs = _get_session_kwargs(insecure, auth)
-        app.logger.info(f"Cache miss. Fetching and processing directory for {url}")
-        zip_context = RemoteZip(url, **kwargs)
-
-    with zip_context as zf:
+    app.logger.info(f"Cache miss for {url}. Fetching and processing directory.")
+    with get_zip_context(url, insecure, auth) as zf:
         for info in zf.infolist():
             # Skip directory entries, we build the structure from file paths
             if info.is_dir():
@@ -380,18 +397,26 @@ def view():
     insecure = request.args.get("no_verify") == "on"
     user = request.args.get("user")
     password = request.args.get("password")
-
-    if not url: return redirect(url_for("index"))
-
+    zip_password = request.args.get("zip_password")
+    
+    # Clear previous session data
+    session.clear()
+    if not url:
+        return redirect(url_for("index"))
+    
     auth = None
     if user:
         auth = (user, password or '')
+        session['http_user'] = user
+        session['http_password'] = password or ''
+    if zip_password:
+        session['zip_password'] = zip_password
 
     try:
         tree = list_entries(url, insecure=insecure, auth=auth)
-        return render_template_string(INDEX_HTML, tree=tree, url=url, no_verify=insecure, user=user, password=password)
+        return render_template_string(INDEX_HTML, tree=tree, url=url, no_verify=insecure, user=user, password=password, zip_password=zip_password)
     except Exception as e:
-        return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=insecure, user=user, password=password)
+        return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=insecure, user=user, password=password, zip_password=zip_password)
 
 @app.route("/browse")
 def browse_local_file():
@@ -415,34 +440,34 @@ def with_remote_zip(f):
         url = request.args.get("url")
         name = request.args.get("name")
         insecure = request.args.get("no_verify") == "on"
-        user = request.args.get("user")
-        password = request.args.get("password")
+        # Retrieve credentials from session instead of URL
+        user = session.get('http_user')
+        password = session.get('http_password')
+        zip_password = session.get('zip_password')
 
         if not url or not name:
             abort(400, "Missing 'url' or 'name' parameter.")
         
         auth = None
         if user:
-            auth = (user, password or '')
+            auth = (user, password)
 
         # Pass the parsed arguments to the decorated function
-        return f(url, name, insecure, auth, *args, **kwargs)
+        return f(url, name, insecure, auth, zip_password, *args, **kwargs)
     return decorated_function
 
-def _stream_zip_file(url, name, insecure, auth=None):
+def _stream_zip_file(url, name, insecure, auth=None, zip_password=None):
     """
     A generator that creates a RemoteZip instance and streams a file from it.
     This ensures the RemoteZip object remains open during the entire stream.
     """
-    try:
-        is_local = is_local_path(url)
-        if is_local:
-            zip_context = zipfile.ZipFile(url, 'r')
-        else:
-            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+    pwd_bytes = None
+    if zip_password:
+        pwd_bytes = zip_password.encode('utf-8')
 
-        with zip_context as zf:
-            with zf.open(name) as f:
+    try:
+        with get_zip_context(url, insecure, auth) as zf:
+            with zf.open(name, pwd=pwd_bytes) as f:
                 while True:
                     chunk = f.read(64 * 1024)
                     if not chunk:
@@ -453,39 +478,58 @@ def _stream_zip_file(url, name, insecure, auth=None):
         # because it happens inside a generator. We can't easily abort(404).
         # The stream will just be empty, resulting in a 0-byte response.
         app.logger.error(f"File '{name}' not found in zip at url {url}")
+    except RuntimeError as e:
+        if "password required" in str(e):
+            app.logger.error(f"Password required or incorrect for file '{name}' in zip at url {url}")
+        else:
+            app.logger.error(f"Error streaming zip file from url {url}: {e}")
     except Exception as e:
         app.logger.error(f"Error streaming zip file from url {url}: {e}")
 
 @app.route("/preview")
 @with_remote_zip
-def preview_file(url, name, insecure, auth):
-    is_local = is_local_path(url)
-    if is_local:
-        zip_context = zipfile.ZipFile(url, 'r')
-    else:
-        zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
-
-    with zip_context as zf:
-        with zf.open(name) as f:
-            data = f.read(100*1024)  # limit preview size
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = data.decode("latin-1", errors="replace")
-    # Preview is not streamed, so original logic is fine
-    return f"<h3>Preview of {name}</h3><pre>{text}</pre>"
+def preview_file(url, name, insecure, auth, zip_password):
+    try:
+        pwd_bytes = zip_password.encode('utf-8') if zip_password else None
+        with get_zip_context(url, insecure, auth) as zf:
+            with zf.open(name, pwd=pwd_bytes) as f:
+                data = f.read(100*1024)  # limit preview size
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = data.decode("latin-1", errors="replace")
+        return f"<h3>Preview of {name}</h3><pre>{text}</pre>"
+    except RuntimeError as e:
+        if "password required" in str(e):
+            return "<strong>Error:</strong> This file is encrypted. Please provide a password in the main form and try again.", 401
+        raise e
 
 @app.route("/image")
 @with_remote_zip
-def preview_image(url, name, insecure, auth):
+def preview_image(url, name, insecure, auth, zip_password):
     mime, _ = mimetypes.guess_type(name)
-    return Response(_stream_zip_file(url, name, insecure, auth), mimetype=mime or "application/octet-stream")
+    return Response(_stream_zip_file(url, name, insecure, auth, zip_password), mimetype=mime or "application/octet-stream")
 
 @app.route("/file")
 @with_remote_zip
-def download_file(url, name, insecure, auth):
+def download_file(url, name, insecure, auth, zip_password):
+    # We peek at the first chunk to see if a password error occurs before sending headers
+    stream_generator = _stream_zip_file(url, name, insecure, auth, zip_password)
+    try:
+        first_chunk = next(stream_generator)
+    except StopIteration: # Handles empty files
+        first_chunk = b''
+    except RuntimeError as e:
+        if "password required" in str(e):
+            return "<strong>Error:</strong> This file is encrypted. Please provide a password in the main form and try again.", 401
+        raise e
+
+    def combined_stream():
+        yield first_chunk
+        yield from stream_generator
+
     headers = {"Content-Disposition": f'attachment; filename="{Path(name).name}"'}
-    return Response(_stream_zip_file(url, name, insecure, auth), headers=headers, mimetype="application/octet-stream")
+    return Response(combined_stream(), headers=headers, mimetype="application/octet-stream")
 
 def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
     """Handles the command-line download operation with progress display."""
@@ -504,13 +548,7 @@ def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
     output.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        is_local = is_local_path(url)
-        if is_local:
-            zip_context = zipfile.ZipFile(url, 'r')
-        else:
-            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
-
-        with zip_context as zf:
+        with get_zip_context(url, insecure, auth) as zf:
             try:
                 print(f"Searching for '{file_in_zip}' in archive...")
                 info = zf.getinfo(file_in_zip)
@@ -560,13 +598,7 @@ def _cli_download_folder(folder_path, url, output_path, insecure, auth):
     output_base.mkdir(parents=True, exist_ok=True)
 
     try:
-        is_local = is_local_path(url)
-        if is_local:
-            zip_context = zipfile.ZipFile(url, 'r')
-        else:
-            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
-
-        with zip_context as zf:
+        with get_zip_context(url, insecure, auth) as zf:
             # Normalize folder path to end with a slash
             if not folder_path.endswith('/'):
                 folder_path += '/'
@@ -621,13 +653,7 @@ def _cli_list_files(url, list_path, no_subdirs, insecure, auth):
 
     print(f"Fetching file list from {url}...")
     try:
-        is_local = is_local_path(url)
-        if is_local:
-            zip_context = zipfile.ZipFile(url, 'r')
-        else:
-            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
-
-        with zip_context as zf:
+        with get_zip_context(url, insecure, auth) as zf:
             all_files = [info.filename for info in zf.infolist() if not info.is_dir()]
 
         if list_path:
