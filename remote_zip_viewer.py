@@ -34,11 +34,12 @@ from flask import Flask, request, render_template_string, Response, redirect, ur
 from remotezip import RemoteZip
 from pathlib import Path
 import mimetypes
+import zipfile
 from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
@@ -75,7 +76,10 @@ INDEX_HTML = """
 <main class="container">
   <h2 style="margin-bottom: 1.5rem;">Remote ZIP Viewer</h2>
   <form action="{{ url_for('view') }}" method="get">
-    <label for="url">Remote ZIP URL</label>
+    <div style="display: flex; align-items: flex-end; justify-content: space-between;">
+      <label for="url" style="margin: 0;">Remote URL or Local File Path</label>
+      <a href="{{ url_for('browse_local_file') }}" target="_blank" role="button" class="secondary" style="width: auto; padding: 0.5rem 1rem; margin: 0;">Browse...</a>
+    </div>
     <input type="search" id="url" name="url" value="{{ url or '' }}" placeholder="https://example.com/archive.zip" required>
     <div id="auth-fields" class="{% if not user %}hidden{% endif %}">
       <div class="grid">
@@ -307,6 +311,12 @@ def format_bytes(size):
 # It holds up to 100 different URLs and each entry expires after 300 seconds (5 minutes).
 file_list_cache = TTLCache(maxsize=100, ttl=300)
 
+def is_local_path(path):
+    """Checks if a given path is a local file."""
+    # This is a simple but effective check. If the path points to an existing
+    # file on the disk, we'll treat it as a local path.
+    return Path(path).is_file()
+
 def _get_session_kwargs(insecure=False, auth=None):
     """Returns the kwargs for the RemoteZip session."""
     kwargs = {'verify': not insecure}
@@ -316,12 +326,21 @@ def _get_session_kwargs(insecure=False, auth=None):
 
 @cached(file_list_cache)
 def list_entries(url, insecure=False, auth=None):
-    """Parses a remote ZIP file and returns its directory structure as a nested dict."""
+    """Parses a remote or local ZIP file and returns its directory structure as a nested dict."""
     tree = {}
-    kwargs = _get_session_kwargs(insecure, auth)
-    app.logger.info(f"Cache miss. Fetching and processing directory for {url}")
-    with RemoteZip(url, **kwargs) as rz:
-        for info in rz.infolist():
+    
+    is_local = is_local_path(url)
+    
+    if is_local:
+        app.logger.info(f"Cache miss. Processing local file directory for {url}")
+        zip_context = zipfile.ZipFile(url, 'r')
+    else:
+        kwargs = _get_session_kwargs(insecure, auth)
+        app.logger.info(f"Cache miss. Fetching and processing directory for {url}")
+        zip_context = RemoteZip(url, **kwargs)
+
+    with zip_context as zf:
+        for info in zf.infolist():
             # Skip directory entries, we build the structure from file paths
             if info.is_dir():
                 continue
@@ -370,6 +389,22 @@ def view():
     except Exception as e:
         return render_template_string(INDEX_HTML, error=str(e), url=url, no_verify=insecure, user=user, password=password)
 
+@app.route("/browse")
+def browse_local_file():
+    """Opens a native file dialog and redirects to the view page for the selected file."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()  # Hide the main tkinter window
+    file_path = filedialog.askopenfilename(
+        title="Select a ZIP file",
+        filetypes=[("ZIP Archives", "*.zip")]
+    )
+    if file_path:
+        return redirect(url_for('view', url=file_path))
+    return "<script>window.close();</script>" # Close the tab if no file is selected
+
 def with_remote_zip(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -396,8 +431,14 @@ def _stream_zip_file(url, name, insecure, auth=None):
     This ensures the RemoteZip object remains open during the entire stream.
     """
     try:
-        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
-            with rz.open(name) as f:
+        is_local = is_local_path(url)
+        if is_local:
+            zip_context = zipfile.ZipFile(url, 'r')
+        else:
+            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+
+        with zip_context as zf:
+            with zf.open(name) as f:
                 while True:
                     chunk = f.read(64 * 1024)
                     if not chunk:
@@ -414,14 +455,21 @@ def _stream_zip_file(url, name, insecure, auth=None):
 @app.route("/preview")
 @with_remote_zip
 def preview_file(url, name, insecure, auth):
-    with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
-        with rz.open(name) as f:
+    is_local = is_local_path(url)
+    if is_local:
+        zip_context = zipfile.ZipFile(url, 'r')
+    else:
+        zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+
+    with zip_context as zf:
+        with zf.open(name) as f:
             data = f.read(100*1024)  # limit preview size
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 text = data.decode("latin-1", errors="replace")
-    return f"<h3>Preview of {name}</h3><pre>{text}</pre>" # Preview is not streamed, so original logic is fine
+    # Preview is not streamed, so original logic is fine
+    return f"<h3>Preview of {name}</h3><pre>{text}</pre>"
 
 @app.route("/image")
 @with_remote_zip
@@ -452,10 +500,16 @@ def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
     output.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
+        is_local = is_local_path(url)
+        if is_local:
+            zip_context = zipfile.ZipFile(url, 'r')
+        else:
+            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+
+        with zip_context as zf:
             try:
                 print(f"Searching for '{file_in_zip}' in archive...")
-                info = rz.getinfo(file_in_zip)
+                info = zf.getinfo(file_in_zip)
                 total_size = info.file_size
             except KeyError:
                 print(f"Error: File '{file_in_zip}' not found in the remote archive.")
@@ -466,7 +520,7 @@ def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
             downloaded_bytes = 0
             start_time = time.time()
 
-            with rz.open(file_in_zip) as source, open(output, "wb") as target:
+            with zf.open(file_in_zip) as source, open(output, "wb") as target:
                 while True:
                     chunk = source.read(8192)
                     if not chunk:
@@ -502,14 +556,20 @@ def _cli_download_folder(folder_path, url, output_path, insecure, auth):
     output_base.mkdir(parents=True, exist_ok=True)
 
     try:
-        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
+        is_local = is_local_path(url)
+        if is_local:
+            zip_context = zipfile.ZipFile(url, 'r')
+        else:
+            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+
+        with zip_context as zf:
             # Normalize folder path to end with a slash
             if not folder_path.endswith('/'):
                 folder_path += '/'
 
             # Find all files that are inside the specified folder_path
             files_to_download = [
-                info for info in rz.infolist()
+                info for info in zf.infolist()
                 if info.filename.startswith(folder_path) and not info.is_dir()
             ]
 
@@ -530,7 +590,7 @@ def _cli_download_folder(folder_path, url, output_path, insecure, auth):
 
                 print(f"\n[{i+1}/{len(files_to_download)}] Downloading '{info.filename}' to '{file_output_path}'...")
 
-                with rz.open(info.filename) as source, open(file_output_path, "wb") as target:
+                with zf.open(info.filename) as source, open(file_output_path, "wb") as target:
                     while True:
                         chunk = source.read(8192)
                         if not chunk:
@@ -557,8 +617,14 @@ def _cli_list_files(url, list_path, no_subdirs, insecure, auth):
 
     print(f"Fetching file list from {url}...")
     try:
-        with RemoteZip(url, **_get_session_kwargs(insecure, auth)) as rz:
-            all_files = [info.filename for info in rz.infolist() if not info.is_dir()]
+        is_local = is_local_path(url)
+        if is_local:
+            zip_context = zipfile.ZipFile(url, 'r')
+        else:
+            zip_context = RemoteZip(url, **_get_session_kwargs(insecure, auth))
+
+        with zip_context as zf:
+            all_files = [info.filename for info in zf.infolist() if not info.is_dir()]
 
         if list_path:
             # Normalize list_path to ensure it's treated as a directory

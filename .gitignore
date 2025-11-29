@@ -31,3 +31,5 @@ Thumbs.db
 .port
 remote-zip-downloader.zip
 output.zip
+BuildManifest.plist
+RemoteZipViewer.spec
