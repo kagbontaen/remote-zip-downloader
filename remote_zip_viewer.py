@@ -5,6 +5,7 @@ def _ensure_dependencies():
     """
     import sys
     import subprocess
+    import os
     
     # List of required packages and their corresponding import names
     required_packages = {
@@ -26,7 +27,10 @@ def _ensure_dependencies():
         print("Attempting to install them now...")
         python_executable = sys.executable
         subprocess.check_call([python_executable, "-m", "pip", "install", *missing_packages])
-        sys.exit("\nDependencies installed successfully. Please run the script again.")
+        
+        print("\nDependencies installed successfully. Restarting script...")
+        # Replace the current process with a new one, running the same command
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 _ensure_dependencies()
 
@@ -39,7 +43,7 @@ from functools import wraps
 from cachetools import cached, TTLCache
 
 app = Flask(__name__)
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 app.jinja_env.globals['version'] = __version__
 
 INDEX_HTML = """
