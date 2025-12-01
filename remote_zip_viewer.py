@@ -6,6 +6,7 @@ def _ensure_dependencies():
     import sys
     import subprocess
     import os
+    import shutil
     
     # List of required packages and their corresponding import names
     required_packages = {
@@ -25,12 +26,46 @@ def _ensure_dependencies():
     if missing_packages:
         print(f"The following required packages are missing: {', '.join(missing_packages)}")
         print("Attempting to install them now...")
-        python_executable = sys.executable
-        subprocess.check_call([python_executable, "-m", "pip", "install", *missing_packages])
-        
-        print("\nDependencies installed successfully. Restarting script...")
-        # Replace the current process with a new one, running the same command
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        # On Debian-based systems, try to use apt-get first as it's the standard.
+        if sys.platform.startswith('linux') and shutil.which('apt-get'):
+            apt_package_map = {
+                'Flask': 'python3-flask',
+                'remotezip': 'python3-remotezip',
+                'cachetools': 'python3-cachetools',
+                'waitress': 'python3-waitress'
+            }
+            apt_packages = [apt_package_map.get(p) for p in missing_packages]
+
+            if all(apt_packages):
+                try:
+                    print("Attempting to install using 'apt-get'. This may require sudo privileges.")
+                    # It's good practice to update package lists before installing.
+                    subprocess.check_call(['sudo', 'apt-get', 'update'])
+                    subprocess.check_call(['sudo', 'apt-get', 'install', '-y', *apt_packages])
+                    
+                    print("\nDependencies installed successfully. Restarting script...")
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                    return # Exit after successful restart
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    print(f"\nInstallation with 'apt-get' failed: {e}")
+                    print("This could be due to missing permissions or packages not being available.")
+                    print("Falling back to 'pip' for installation.")
+            else:
+                print("Could not find all required packages in the apt repository. Falling back to 'pip'.")
+
+        # Fallback to pip for non-Debian systems or if apt-get fails
+        try:
+            print("Attempting to install using 'pip'.")
+            python_executable = sys.executable
+            subprocess.check_call([python_executable, "-m", "pip", "install", *missing_packages])
+            print("\nDependencies installed successfully. Restarting script...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"\nFATAL: Dependency installation failed using both apt-get and pip: {e}")
+            print("Please install the following packages manually and restart the script:")
+            print(f"  {', '.join(missing_packages)}")
+            sys.exit(1)
 
 _ensure_dependencies()
 
@@ -44,7 +79,7 @@ from cachetools import cached, TTLCache
 import os
 
 app = Flask(__name__)
-__version__ = "0.8.3"
+__version__ = "0.8.8"
 app.secret_key = os.urandom(24) # Needed for secure session management
 app.jinja_env.globals['version'] = __version__
 
@@ -151,7 +186,7 @@ INDEX_HTML = """
             <span class="tree-item-label" title="{{ name }}">{{ name }}</span>
             <span class="tree-item-size">{{ node.info.file_size|format_bytes }}</span>
             <div class="tree-item-actions">
-              {% if node.info.is_text %}
+              {% if node.info.is_text or node.info.file_size < 102400 %}
                 <a href="{{ url_for('preview_file') }}?url={{ url|urlencode }}&name={{ node.info.filename|urlencode }}{% if no_verify %}&no_verify=on{% endif %}" role="button" class="outline secondary btn-sm">Preview</a>
               {% endif %}
               {% if node.info.is_image %}
@@ -319,7 +354,7 @@ def format_bytes(size):
 
 # Cache for storing the directory structure of remote ZIP files.
 # It holds up to 100 different URLs and each entry expires after 300 seconds (5 minutes).
-file_list_cache = TTLCache(maxsize=100, ttl=300)
+file_list_cache = TTLCache(maxsize=100, ttl=30000)
 
 def is_local_path(path):
     """Checks if a given path is a local file."""
@@ -535,7 +570,10 @@ def _cli_download(file_in_zip, url, output_path, insecure, auth, create_dirs):
     """Handles the command-line download operation with progress display."""
     import time
     
-    print(f"Connecting to {url}...")
+    if is_local_path:
+        print(f"Getting content of local file stored at {url}")
+    else:
+        print(f"Connecting to {url}...")
     output = Path(output_path)
 
     if output.is_dir():
